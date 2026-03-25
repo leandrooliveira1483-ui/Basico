@@ -210,6 +210,37 @@ def prep_df(df: pd.DataFrame, is_future: bool = False) -> pd.DataFrame:
         if old in df.columns and new not in df.columns:
             df = df.rename(columns={old: new})
 
+    # Se "ano/rodada" não vierem no Excel, tentamos inferir usando:
+    # 1) coluna "date" (recomendado), ou
+    # 2) ordem das linhas + repetição de confrontos (fallback).
+    if "ano" not in df.columns or "rodada" not in df.columns:
+        if "date" in df.columns:
+            dt = pd.to_datetime(df["date"], errors="coerce")
+            if dt.notna().sum() > 0:
+                iso = dt.dt.isocalendar()
+                if "ano" not in df.columns:
+                    # Ano ISO evita problemas de virada no fim/início do ano.
+                    df["ano"] = iso.year.astype("Int64")
+                    df["ano"] = df["ano"].fillna(dt.dt.year.astype("Int64"))
+                if "rodada" not in df.columns:
+                    # Aproxima rodada com semana ISO relativa ao início da temporada.
+                    season_week0 = (
+                        pd.Series(iso.week, index=df.index)
+                        .groupby(df["ano"])
+                        .transform("min")
+                    )
+                    df["rodada"] = (iso.week - season_week0 + 1).astype("Int64")
+
+        # Fallback sem data: usa sequência de jogos por time para estimar rodada.
+        if "rodada" not in df.columns:
+            home_games_before = df.groupby("home").cumcount()
+            away_games_before = df.groupby("away").cumcount()
+            df["rodada"] = np.maximum(home_games_before, away_games_before) + 1
+
+        if "ano" not in df.columns:
+            # Sem data e sem ano explícito, assume temporada única.
+            df["ano"] = 1
+
     required = ["rodada", "home", "away", "ano"]
     if not is_future:
         required += ["hg", "ag"]
